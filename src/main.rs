@@ -5,7 +5,7 @@ use std::io::{Read, Seek, stdout};
 use std::str::FromStr;
 use lazy_static::lazy_static;
 use serde::{Serialize, Serializer};
-use clap::Parser;
+use clap::{Parser, ArgEnum};
 use thiserror::Error;
 
 const DIVISION_POINTS: f32 = 50.0;
@@ -65,14 +65,16 @@ lazy_static! {
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-
     output: Output,
     file: String
 }
 
-#[derive(Debug)]
+#[derive(Debug, ArgEnum, Clone)]
 enum Output {
-    Raw, Parsed
+    #[clap(name = "raw")]
+    Raw,
+    #[clap(name = "parsed")]
+    Parsed
 }
 
 impl FromStr for Output {
@@ -94,34 +96,40 @@ struct OutputParseError(String);
 fn main() {
     let args = Args::parse();
     let file: File = FsFile::open(args.file).unwrap().read_ne().unwrap();
-    let channel1_points = generate_points(&file.channel11, &file.header.channel1_scale, &file.header.time_scale);
-    let channel2_points = generate_points(&file.channel11, &file.header.channel2_scale, &file.header.time_scale);
 
-    let data = Data {
-        trigger: Trigger {
-            trigger_type: file.header.trigger_type,
-            edge: file.header.trigger_edge,
-            channel: file.header.trigger_channel,
-            trigger_50: file.header.trigger_50
-        },
-        time_scale: file.header.time_scale,
-        channel1: Channel {
-            scale: file.header.channel1_scale,
-            coupling: file.header.channel1_coupling,
-            attenuation: file.header.channel1_probe,
-            measurements: file.header.channel1_measurements,
-            points: channel1_points
-        },
-        channel2: Channel {
-            scale: file.header.channel2_scale,
-            coupling: file.header.channel2_coupling,
-            attenuation: file.header.channel2_probe,
-            measurements: file.header.channel2_measurements,
-            points: channel2_points
+    match args.output {
+        Output::Raw => serde_json::to_writer(stdout(), &file),
+        Output::Parsed => {
+            let channel1_points = generate_points(&file.channel11, &file.header.channel1_scale, &file.header.time_scale, file.header.channel1_offset);
+            let channel2_points = generate_points(&file.channel11, &file.header.channel2_scale, &file.header.time_scale, file.header.channel2_offset);
+
+            let data = Data {
+                trigger: Trigger {
+                    trigger_type: file.header.trigger_type,
+                    edge: file.header.trigger_edge,
+                    channel: file.header.trigger_channel,
+                    trigger_50: file.header.trigger_50
+                },
+                time_scale: file.header.time_scale,
+                channel1: Channel {
+                    scale: file.header.channel1_scale,
+                    coupling: file.header.channel1_coupling,
+                    attenuation: file.header.channel1_probe,
+                    measurements: file.header.channel1_measurements,
+                    points: channel1_points
+                },
+                channel2: Channel {
+                    scale: file.header.channel2_scale,
+                    coupling: file.header.channel2_coupling,
+                    attenuation: file.header.channel2_probe,
+                    measurements: file.header.channel2_measurements,
+                    points: channel2_points
+                }
+            };
+
+            serde_json::to_writer(stdout(), &data)
         }
-    };
-
-    serde_json::to_writer(stdout(), &data).unwrap();
+    }.unwrap();
 }
 
 #[derive(Debug, Serialize)]
@@ -149,10 +157,10 @@ struct Trigger {
     trigger_50: Trigger50
 }
 
-fn generate_points(values: &Vec<u16>, voltage_scale: &Scale<Volt>, time_scale: &Scale<Second>) -> Vec<Point> {
+fn generate_points(values: &Vec<u16>, voltage_scale: &Scale<Volt>, time_scale: &Scale<Second>, offset: u8) -> Vec<Point> {
     values.iter().enumerate().map(| (index, voltage)| Point {
         time: (index as f32) * time_scale.get_scale()/ DIVISION_POINTS,
-        voltage: (*voltage as f32 - 200.0) * voltage_scale.get_scale()/DIVISION_POINTS
+        voltage: (*voltage as f32 - offset as f32) * voltage_scale.get_scale()/DIVISION_POINTS
     }).collect()
 }
 
@@ -200,7 +208,11 @@ pub struct Header {
     trigger_edge: TriggerEdge,
     #[br(pad_before = 1)]
     trigger_channel: TriggerChannel,
-    #[br(pad_before = 89)]
+    #[br(pad_before = 53)]
+    channel1_offset: u8,
+    #[br(pad_before = 1)]
+    channel2_offset: u8,
+    #[br(pad_before = 32)]
     screen_brightness: u8,
     #[br(pad_before = 1)]
     grid_brightness: u8,

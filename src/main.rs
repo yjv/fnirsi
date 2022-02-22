@@ -122,7 +122,7 @@ fn main() {
                         vrms: process_voltage_measurement(file.header.channel1_measurements.vrms),
                         vpp: process_voltage_measurement(file.header.channel1_measurements.vpp),
                         vp: process_voltage_measurement(file.header.channel1_measurements.vp),
-                        frequency: file.header.channel1_measurements.frequency,
+                        frequency: parse_frequency(file.header.channel1_measurements.frequency_high, file.header.channel1_measurements.frequency_low),
                         cycle_ns: file.header.channel1_measurements.cycle_ns,
                         time_plus_ns: file.header.channel1_measurements.time_plus_ns,
                         time_minus_ns: file.header.channel1_measurements.time_minus_ns,
@@ -142,7 +142,7 @@ fn main() {
                         vrms: process_voltage_measurement(file.header.channel2_measurements.vrms),
                         vpp: process_voltage_measurement(file.header.channel2_measurements.vpp),
                         vp: process_voltage_measurement(file.header.channel2_measurements.vp),
-                        frequency: file.header.channel2_measurements.frequency,
+                        frequency: parse_frequency(file.header.channel2_measurements.frequency_high, file.header.channel2_measurements.frequency_low),
                         cycle_ns: file.header.channel2_measurements.cycle_ns,
                         time_plus_ns: file.header.channel2_measurements.time_plus_ns,
                         time_minus_ns: file.header.channel2_measurements.time_minus_ns,
@@ -156,6 +156,12 @@ fn main() {
             serde_json::to_writer(stdout(), &data)
         }
     }.unwrap();
+}
+
+fn parse_frequency(high: u16, low: u16) -> u32 {
+    let file: File;
+
+    (high as u32 * 65536) + low as u32
 }
 
 #[derive(Debug, Serialize)]
@@ -259,8 +265,8 @@ pub struct Measurements {
     vpp: u16,
     #[br(pad_before = 2)]
     vp: u16,
-    #[br(pad_before = 2)]
-    frequency: u16,
+    frequency_high: u16,
+    frequency_low: u16,
     #[br(pad_before = 2)]
     cycle_ns: u16,
     #[br(pad_before = 2)]
@@ -281,7 +287,7 @@ pub struct ProcessedMeasurements {
     vrms: f32,
     vpp: f32,
     vp: f32,
-    frequency: u16,
+    frequency: u32,
     cycle_ns: u16,
     time_plus_ns: u16,
     time_minus_ns: u16,

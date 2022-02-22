@@ -1,14 +1,17 @@
+use std::convert::{TryFrom, TryInto};
 use std::fmt::{Debug, Display, Formatter};
-use binread::{BinRead, BinReaderExt, BinResult, io::SeekFrom, ReadOptions};
+use binread::{BinRead, BinReaderExt, io::SeekFrom};
 use std::fs::File as FsFile;
-use std::io::{Read, Seek, stdout};
+use std::io::stdout;
 use std::str::FromStr;
 use lazy_static::lazy_static;
 use serde::{Serialize, Serializer};
 use clap::{Parser, ArgEnum};
+use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
 use thiserror::Error;
 
 const DIVISION_POINTS: f32 = 50.0;
+const VOLTAGE_MEASUREMENT_DIVISOR: f32 = 1024f32;
 
 lazy_static! {
     /// This is an example for using doc comment attributes
@@ -100,21 +103,24 @@ fn main() {
     match args.output {
         Output::Raw => serde_json::to_writer(stdout(), &file),
         Output::Parsed => {
-            let channel1_points = generate_points(&file.channel11, &file.header.channel1_scale, &file.header.time_scale, file.header.channel1_offset);
-            let channel2_points = generate_points(&file.channel11, &file.header.channel2_scale, &file.header.time_scale, file.header.channel2_offset);
+            let time_scale = file.header.time_scale.try_into().unwrap();
+            let chanel1_scale = file.header.channel1_scale.try_into().unwrap();
+            let channel2_scale = file.header.channel2_scale.try_into().unwrap();
+            let channel1_points = generate_points(&file.channel11, &chanel1_scale, &time_scale, file.header.channel1_offset);
+            let channel2_points = generate_points(&file.channel11, &channel2_scale, &time_scale, file.header.channel2_offset);
 
             let data = Data {
                 trigger: Trigger {
-                    trigger_type: file.header.trigger_type,
-                    edge: file.header.trigger_edge,
-                    channel: file.header.trigger_channel,
-                    trigger_50: file.header.trigger_50
+                    trigger_type: file.header.trigger_type.try_into().unwrap(),
+                    edge: file.header.trigger_edge.try_into().unwrap(),
+                    channel: file.header.trigger_channel.try_into().unwrap(),
+                    trigger_50: file.header.trigger_50.try_into().unwrap()
                 },
-                time_scale: file.header.time_scale,
+                time_scale,
                 channel1: Channel {
-                    scale: file.header.channel1_scale,
-                    coupling: file.header.channel1_coupling,
-                    attenuation: file.header.channel1_probe,
+                    scale: chanel1_scale,
+                    coupling: file.header.channel1_coupling.try_into().unwrap(),
+                    attenuation: file.header.channel1_probe.try_into().unwrap(),
                     measurements: ProcessedMeasurements {
                         vmax: process_voltage_measurement(file.header.channel1_measurements.vmax),
                         vmin: process_voltage_measurement(file.header.channel1_measurements.vmin),
@@ -132,9 +138,9 @@ fn main() {
                     points: channel1_points
                 },
                 channel2: Channel {
-                    scale: file.header.channel2_scale,
-                    coupling: file.header.channel2_coupling,
-                    attenuation: file.header.channel2_probe,
+                    scale: channel2_scale,
+                    coupling: file.header.channel2_coupling.try_into().unwrap(),
+                    attenuation: file.header.channel2_probe.try_into().unwrap(),
                     measurements: ProcessedMeasurements {
                         vmax: process_voltage_measurement(file.header.channel2_measurements.vmax),
                         vmin: process_voltage_measurement(file.header.channel2_measurements.vmin),
@@ -159,9 +165,7 @@ fn main() {
 }
 
 fn parse_frequency(high: u16, low: u16) -> u32 {
-    let file: File;
-
-    (high as u32 * 65536) + low as u32
+    ((high as u32) << 16) + low as u32
 }
 
 #[derive(Debug, Serialize)]
@@ -197,7 +201,7 @@ fn generate_points(values: &Vec<u16>, voltage_scale: &Scale<Volt>, time_scale: &
 }
 
 fn process_voltage_measurement(measurement: u16) -> f32 {
-    (measurement as f32)/1024f32
+    (measurement as f32)/VOLTAGE_MEASUREMENT_DIVISOR
 }
 
 #[derive(Debug, Serialize)]
@@ -223,27 +227,27 @@ pub struct File {
 #[derive(BinRead, Debug, Serialize)]
 pub struct Header {
     #[br(pad_before = 4)]
-    channel1_scale: Scale<Volt>,
+    channel1_scale: u16,
     #[br(pad_before = 2)]
-    channel1_coupling: Coupling,
-    channel1_probe: Attenuation,
+    channel1_coupling: u16,
+    channel1_probe: u16,
     #[br(pad_before = 2)]
-    channel2_scale: Scale<Volt>,
+    channel2_scale: u16,
     #[br(pad_before = 2)]
-    channel2_coupling: Coupling,
-    channel2_probe: Attenuation,
-    time_scale: Scale<Second>,
-    scroll_speed: ScrollSpeed,
-    trigger_type: TriggerType,
-    trigger_edge: TriggerEdge,
-    trigger_channel: TriggerChannel,
+    channel2_coupling: u16,
+    channel2_probe: u16,
+    time_scale: u16,
+    scroll_speed: u16,
+    trigger_type: u16,
+    trigger_edge: u16,
+    trigger_channel: u16,
     #[br(pad_before = 52)]
     channel1_offset: u16,
     channel2_offset: u16,
     #[br(pad_before = 32)]
     screen_brightness: u16,
     grid_brightness: u16,
-    trigger_50: Trigger50,
+    trigger_50: u16,
     #[br(seek_before = SeekFrom::Start(208))]
     channel1_measurements: Measurements,
     #[br(seek_before = SeekFrom::Start(256))]
@@ -295,9 +299,9 @@ pub struct ProcessedMeasurements {
     duty_minus_percentage: u16
 }
 
-trait Unit: Display + Clone {}
+trait Unit: Display + Clone + Copy {}
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Volt;
 
 impl Unit for Volt {}
@@ -314,7 +318,7 @@ impl Display for Volt {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Second;
 
 impl Unit for Second {}
@@ -331,7 +335,7 @@ impl Display for Second {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Copy)]
 struct Scale<T: Unit> {
     value: f32,
     scale: i32,
@@ -362,72 +366,80 @@ impl <T: Unit> Debug for Scale<T> {
     }
 }
 
-impl BinRead for Scale<Second> {
-    type Args = ();
+impl TryFromPrimitive for Scale<Volt> {
+    type Primitive = u16;
+    const NAME: &'static str = "Scale<Volt>";
 
-    fn read_options<R: Read + Seek>(reader: &mut R, options: &ReadOptions, _: Self::Args) -> BinResult<Self> {
-        scale_read_options(reader, options, &TIME_SCALES)
-
+    fn try_from_primitive(number: Self::Primitive) -> Result<Self, TryFromPrimitiveError<Self>> {
+        PROBE_SCALES.get(number as usize).map(Clone::clone).ok_or_else(|| TryFromPrimitiveError { number })
     }
 }
 
-impl BinRead for Scale<Volt> {
-    type Args = ();
+impl TryFrom<u16> for Scale<Volt> {
+    type Error = TryFromPrimitiveError<Self>;
 
-    fn read_options<R: Read + Seek>(reader: &mut R, options: &ReadOptions, _: Self::Args) -> BinResult<Self> {
-        scale_read_options(reader, options, &PROBE_SCALES)
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        TryFromPrimitive::try_from_primitive(value)
     }
 }
 
-fn scale_read_options<T: Unit, R: Read + Seek>(reader: &mut R, options: &ReadOptions, scales: &Vec<Scale<T>>) -> BinResult<Scale<T>> {
-    let pos = reader.stream_position()?;
-    let value: u16 = BinRead::read_options(reader, options, ())?;
+impl TryFromPrimitive for Scale<Second> {
+    type Primitive = u16;
+    const NAME: &'static str = "Scale<Second>";
 
-    Ok(scales.get(value as usize).ok_or_else(|| binread::Error::NoVariantMatch {
-        pos
-    })?.clone())
+    fn try_from_primitive(number: Self::Primitive) -> Result<Self, TryFromPrimitiveError<Self>> {
+        TIME_SCALES.get(number as usize).map(Clone::clone).ok_or_else(|| TryFromPrimitiveError { number })
+    }
 }
 
-#[derive(Debug, BinRead, Serialize)]
-#[br(repr = u16)]
+impl TryFrom<u16> for Scale<Second> {
+    type Error = TryFromPrimitiveError<Self>;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        TryFromPrimitive::try_from_primitive(value)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Serialize)]
+#[repr(u16)]
 enum Coupling {
     DC = 0, AC
 }
 
-#[derive(Debug, BinRead, Serialize)]
-#[br(repr = u16)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Serialize)]
+#[repr(u16)]
 enum Attenuation {
     OneX = 0,
     TenX,
     OneHundredX
 }
 
-#[derive(Debug, BinRead, Serialize)]
-#[br(repr = u16)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Serialize)]
+#[repr(u16)]
 enum ScrollSpeed {
     Fast = 0, Slow
 }
 
-#[derive(Debug, BinRead, Serialize)]
-#[br(repr = u16)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Serialize)]
+#[repr(u16)]
 enum TriggerType {
     Auto = 0, Single, Normal
 }
 
-#[derive(Debug, BinRead, Serialize)]
-#[br(repr = u16)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Serialize)]
+#[repr(u16)]
 enum TriggerEdge {
     Rising = 0, Falling
 }
 
-#[derive(Debug, BinRead, Serialize)]
-#[br(repr = u16)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Serialize)]
+#[repr(u16)]
 enum TriggerChannel {
     Channel1 = 0, Channel2
 }
 
-#[derive(Debug, BinRead, Serialize)]
-#[br(repr = u16)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Serialize)]
+#[repr(u16)]
 enum Trigger50 {
     On = 0, Off
 }

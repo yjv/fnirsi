@@ -95,7 +95,7 @@ struct OutputParseError(String);
 
 fn main() {
     let args = Args::parse();
-    let file: File = FsFile::open(args.file).unwrap().read_ne().unwrap();
+    let file: File = FsFile::open(args.file).unwrap().read_le().unwrap();
 
     match args.output {
         Output::Raw => serde_json::to_writer(stdout(), &file),
@@ -115,14 +115,40 @@ fn main() {
                     scale: file.header.channel1_scale,
                     coupling: file.header.channel1_coupling,
                     attenuation: file.header.channel1_probe,
-                    measurements: file.header.channel1_measurements,
+                    measurements: ProcessedMeasurements {
+                        vmax: process_voltage_measurement(file.header.channel1_measurements.vmax),
+                        vmin: process_voltage_measurement(file.header.channel1_measurements.vmin),
+                        vavg: process_voltage_measurement(file.header.channel1_measurements.vavg),
+                        vrms: process_voltage_measurement(file.header.channel1_measurements.vrms),
+                        vpp: process_voltage_measurement(file.header.channel1_measurements.vpp),
+                        vp: process_voltage_measurement(file.header.channel1_measurements.vp),
+                        frequency: file.header.channel1_measurements.frequency,
+                        cycle_ns: file.header.channel1_measurements.cycle_ns,
+                        time_plus_ns: file.header.channel1_measurements.time_plus_ns,
+                        time_minus_ns: file.header.channel1_measurements.time_minus_ns,
+                        duty_plus_percentage: file.header.channel1_measurements.duty_plus_percentage,
+                        duty_minus_percentage: file.header.channel1_measurements.duty_minus_percentage
+                    },
                     points: channel1_points
                 },
                 channel2: Channel {
                     scale: file.header.channel2_scale,
                     coupling: file.header.channel2_coupling,
                     attenuation: file.header.channel2_probe,
-                    measurements: file.header.channel2_measurements,
+                    measurements: ProcessedMeasurements {
+                        vmax: process_voltage_measurement(file.header.channel2_measurements.vmax),
+                        vmin: process_voltage_measurement(file.header.channel2_measurements.vmin),
+                        vavg: process_voltage_measurement(file.header.channel2_measurements.vavg),
+                        vrms: process_voltage_measurement(file.header.channel2_measurements.vrms),
+                        vpp: process_voltage_measurement(file.header.channel2_measurements.vpp),
+                        vp: process_voltage_measurement(file.header.channel2_measurements.vp),
+                        frequency: file.header.channel2_measurements.frequency,
+                        cycle_ns: file.header.channel2_measurements.cycle_ns,
+                        time_plus_ns: file.header.channel2_measurements.time_plus_ns,
+                        time_minus_ns: file.header.channel2_measurements.time_minus_ns,
+                        duty_plus_percentage: file.header.channel2_measurements.duty_plus_percentage,
+                        duty_minus_percentage: file.header.channel2_measurements.duty_minus_percentage
+                    },
                     points: channel2_points
                 }
             };
@@ -145,7 +171,7 @@ struct Channel {
     scale: Scale<Volt>,
     coupling: Coupling,
     attenuation: Attenuation,
-    measurements: Measurements,
+    measurements: ProcessedMeasurements,
     points: Vec<Point>
 }
 
@@ -157,11 +183,15 @@ struct Trigger {
     trigger_50: Trigger50
 }
 
-fn generate_points(values: &Vec<u16>, voltage_scale: &Scale<Volt>, time_scale: &Scale<Second>, offset: u8) -> Vec<Point> {
+fn generate_points(values: &Vec<u16>, voltage_scale: &Scale<Volt>, time_scale: &Scale<Second>, offset: u16) -> Vec<Point> {
     values.iter().enumerate().map(| (index, voltage)| Point {
         time: (index as f32) * time_scale.get_scale()/ DIVISION_POINTS,
         voltage: (*voltage as f32 - offset as f32) * voltage_scale.get_scale()/DIVISION_POINTS
     }).collect()
+}
+
+fn process_voltage_measurement(measurement: u16) -> f32 {
+    (measurement as f32)/1024f32
 }
 
 #[derive(Debug, Serialize)]
@@ -188,35 +218,25 @@ pub struct File {
 pub struct Header {
     #[br(pad_before = 4)]
     channel1_scale: Scale<Volt>,
-    #[br(pad_before = 3)]
+    #[br(pad_before = 2)]
     channel1_coupling: Coupling,
-    #[br(pad_before = 1)]
     channel1_probe: Attenuation,
-    #[br(pad_before = 3)]
+    #[br(pad_before = 2)]
     channel2_scale: Scale<Volt>,
-    #[br(pad_before = 3)]
+    #[br(pad_before = 2)]
     channel2_coupling: Coupling,
-    #[br(pad_before = 1)]
     channel2_probe: Attenuation,
-    #[br(pad_before = 1)]
     time_scale: Scale<Second>,
-    #[br(pad_before = 1)]
     scroll_speed: ScrollSpeed,
-    #[br(pad_before = 1)]
     trigger_type: TriggerType,
-    #[br(pad_before = 1)]
     trigger_edge: TriggerEdge,
-    #[br(pad_before = 1)]
     trigger_channel: TriggerChannel,
-    #[br(pad_before = 53)]
-    channel1_offset: u8,
-    #[br(pad_before = 1)]
-    channel2_offset: u8,
+    #[br(pad_before = 52)]
+    channel1_offset: u16,
+    channel2_offset: u16,
     #[br(pad_before = 32)]
-    screen_brightness: u8,
-    #[br(pad_before = 1)]
-    grid_brightness: u8,
-    #[br(pad_before = 1)]
+    screen_brightness: u16,
+    grid_brightness: u16,
     trigger_50: Trigger50,
     #[br(seek_before = SeekFrom::Start(208))]
     channel1_measurements: Measurements,
@@ -241,11 +261,32 @@ pub struct Measurements {
     vp: u16,
     #[br(pad_before = 2)]
     frequency: u16,
-    cycle: u32,
-    time_plus: u32,
-    time_minus: u32,
-    duty_plus: u32,
-    duty_minus: u32
+    #[br(pad_before = 2)]
+    cycle_ns: u16,
+    #[br(pad_before = 2)]
+    time_plus_ns: u16,
+    #[br(pad_before = 2)]
+    time_minus_ns: u16,
+    #[br(pad_before = 2)]
+    duty_plus_percentage: u16,
+    #[br(pad_before = 2)]
+    duty_minus_percentage: u16
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProcessedMeasurements {
+    vmax: f32,
+    vmin: f32,
+    vavg: f32,
+    vrms: f32,
+    vpp: f32,
+    vp: f32,
+    frequency: u16,
+    cycle_ns: u16,
+    time_plus_ns: u16,
+    time_minus_ns: u16,
+    duty_plus_percentage: u16,
+    duty_minus_percentage: u16
 }
 
 trait Unit: Display + Clone {}
@@ -334,7 +375,7 @@ impl BinRead for Scale<Volt> {
 
 fn scale_read_options<T: Unit, R: Read + Seek>(reader: &mut R, options: &ReadOptions, scales: &Vec<Scale<T>>) -> BinResult<Scale<T>> {
     let pos = reader.stream_position()?;
-    let value: u8 = BinRead::read_options(reader, options, ())?;
+    let value: u16 = BinRead::read_options(reader, options, ())?;
 
     Ok(scales.get(value as usize).ok_or_else(|| binread::Error::NoVariantMatch {
         pos
@@ -342,13 +383,13 @@ fn scale_read_options<T: Unit, R: Read + Seek>(reader: &mut R, options: &ReadOpt
 }
 
 #[derive(Debug, BinRead, Serialize)]
-#[br(repr = u8)]
+#[br(repr = u16)]
 enum Coupling {
     DC = 0, AC
 }
 
 #[derive(Debug, BinRead, Serialize)]
-#[br(repr = u8)]
+#[br(repr = u16)]
 enum Attenuation {
     OneX = 0,
     TenX,
@@ -356,31 +397,31 @@ enum Attenuation {
 }
 
 #[derive(Debug, BinRead, Serialize)]
-#[br(repr = u8)]
+#[br(repr = u16)]
 enum ScrollSpeed {
     Fast = 0, Slow
 }
 
 #[derive(Debug, BinRead, Serialize)]
-#[br(repr = u8)]
+#[br(repr = u16)]
 enum TriggerType {
     Auto = 0, Single, Normal
 }
 
 #[derive(Debug, BinRead, Serialize)]
-#[br(repr = u8)]
+#[br(repr = u16)]
 enum TriggerEdge {
     Rising = 0, Falling
 }
 
 #[derive(Debug, BinRead, Serialize)]
-#[br(repr = u8)]
+#[br(repr = u16)]
 enum TriggerChannel {
     Channel1 = 0, Channel2
 }
 
 #[derive(Debug, BinRead, Serialize)]
-#[br(repr = u8)]
+#[br(repr = u16)]
 enum Trigger50 {
     On = 0, Off
 }
